@@ -1,0 +1,63 @@
+node {
+    stage("Checkout the project") {
+        git branch: 'main', url: 'https://github.com/angelica-kaylee/kubernetes_jenkins_project2.git'
+    }
+    stage("Sending docker file to ansible server using SSH agent") {
+        sshagent(['ansible_server']) {
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34'
+            sh 'scp /var/lib/jenkins/workspace/jenkins_pipeline/Dockerfile ubuntu@172.31.84.34:/home/ubuntu'
+        }
+    }
+    stage("Docker Build Image") {
+        sshagent(['ansible_server']) {
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 "cd /home/ubuntu && sudo docker image build -t $JOB_NAME:v1.$BUILD_ID -f /home/ubuntu/Dockerfile ."'
+        }
+    }
+    stage("Docker Image Tagging") {
+        sshagent(['ansible_server']) {
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 "cd /home/ubuntu && sudo docker image tag $JOB_NAME:v1.$BUILD_ID angelicakaylee/$JOB_NAME:v1.$BUILD_ID"'
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 "sudo docker image tag $JOB_NAME:v1.$BUILD_ID angelicakaylee/$JOB_NAME:latest"'
+        }
+    }
+    stage("Pushing docker image from Ansible server to Docker Hub") {
+        sshagent(['ansible_server']) {
+            withCredentials([string(credentialsId: 'dockerhub_access', variable: 'dockerhub_access')]) {
+                // Login to Docker
+                sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 \
+                    "echo '$dockerhub_access' | sudo docker login -u angelicakaylee --password-stdin"
+                """
+                
+                // Push Docker image
+                sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 \
+                    "sudo docker image push angelicakaylee/$JOB_NAME:v1.$BUILD_ID"
+                """
+                // Push Latest Docker image
+                sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 \
+                    "sudo docker image push angelicakaylee/$JOB_NAME:latest"
+                """
+            }
+        }
+    }
+    stage('Sending Deployment & Serviice file to Kubernetes Server'){
+        sshagent(['kubernetes_login']) {
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.82.95'
+            sh 'scp /var/lib/jenkins/workspace/jenkins_pipeline/Deployment.yml ubuntu@172.31.82.95:/home/ubuntu'
+            sh 'scp /var/lib/jenkins/workspace/jenkins_pipeline/Service.yml ubuntu@172.31.82.95:/home/ubuntu'
+        }
+    }
+    stage("Sending ansible playbook file to Ansible Server") {
+        sshagent(['ansible_server']) {
+            sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 cd /home/ubuntu'
+            sh 'scp /var/lib/jenkins/workspace/jenkins_pipeline/ansible.yml ubuntu@172.31.84.34:/home/ubuntu'
+        }
+    }
+    stage("Kubernetes deployment using Ansible Playbook") {
+        sshagent(['ansible_server']) {
+             sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 cd /home/ubuntu'
+			 sh 'ssh -o StrictHostKeyChecking=no ubuntu@172.31.84.34 ansible-playbook ansible.yml'
+        }
+    }
+}
